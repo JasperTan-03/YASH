@@ -1,2 +1,5 @@
 #Default .vscode task files
 .vscode
+
+#Binary
+main
