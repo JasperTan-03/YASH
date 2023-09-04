@@ -4,20 +4,23 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <stdbool.h>
 
 #define MAX_INPUTS 2000
-#define MAX_TOKENS 2000
+#define MAX_TOKENS 1000
 #define MAX_ARG_CHARS 30
 
 int main()
 {
     pid_t child_pid;
-    char *input = (char *)malloc((MAX_INPUTS) * sizeof(char));
-    char *token = (char *)malloc((MAX_TOKENS) * sizeof(char));
-    char *args[100];
+    char input[MAX_INPUTS];
+    char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
+    char *args[MAX_TOKENS];
 
     int i;
     int token_num;
+    int exit_flag = 0; // 0: dont exit, 1: exit
+
     do
     {
         printf("#");
@@ -25,7 +28,8 @@ int main()
         fgets(input, MAX_INPUTS, stdin);
         input[strlen(input) - 1] = 0;
         token_num = 0;
-        while (token = strtok_r(input, " ", &input))
+        char *input_address = input;
+        while (token = strtok_r(input_address, " ", &input_address))
         {
             // printf("token: %s\n", token);
             args[token_num] = (char *)malloc((strlen(token) * sizeof(char)));
@@ -34,40 +38,43 @@ int main()
         }
         args[token_num] = NULL;
 
-        // Execute command:
-        child_pid = fork();
-        if (child_pid == 0)
+        if (strcmp(args[0], "exit") == 0)
         {
-            if (execvp(args[0], args) == -1)
-            {
-                printf("Execvp Error\n");
-            }
-        }
-        else if (child_pid > 0)
-        {
-            int status;
-            waitpid(child_pid, &status, 0);
-            // if (WIFEXITED(status)){
-            //     for(i = 0; i < token_num; i++){
-            //         free(args[i]);
-            //     }
-            // } else {
-            //     printf("Child did not exit\n");
-            // }
-            // printf("Parent\n");
+            exit_flag = 1;
         }
         else
         {
-            printf("error\n");
+            // Execute command:
+            child_pid = fork();
+            if (child_pid == 0)
+            {
+                execvp(args[0], args);
+                perror("mexecvp error\n");
+                exit(1);
+            }
+            else if (child_pid > 0)
+            {
+                int status;
+                waitpid(child_pid, &status, 0);
+
+                // if (WIFEXITED(status)){
+                //     for(i = 0; i < token_num; i++){
+                //         free(args[i]);
+                //     }
+                // } else {
+                //     printf("Child did not exit\n");
+                // }
+                // printf("Parent\n");
+            }
+            else
+            {
+                perror("fork error\n");
+            }
         }
-    } while (strcmp(args[0], "exit") != 0);
+    } while (!exit_flag);
 
     // free(input);
-    // free(token);
-    // for (i = 0; i < MAX_ARG; i++){
-    //     free(args[i]);
-    // }
-    // return 0;
+    free(token);
 }
 
 int test()
