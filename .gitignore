@@ -1,5 +1,6 @@
 #Default .vscode task files
 .vscode
 
-#Binary
+#Other Files and Folders
 main
+test_files

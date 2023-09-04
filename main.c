@@ -5,12 +5,15 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <stdbool.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #define MAX_INPUTS 2000
 #define MAX_TOKENS 1000
 #define MAX_ARG_CHARS 30
 
-int main()
+int main2()
 {
     pid_t child_pid;
     char input[MAX_INPUTS];
@@ -18,98 +21,120 @@ int main()
     char *args[MAX_TOKENS];
 
     int i;
+    int row;
     int token_num;
-    int exit_flag = 0; // 0: dont exit, 1: exit
+    int redirect_idx[2][3] = {-1}; // 1st row: <, >, 2>; 2nd row: <, >, 2>;
+    int exit_flag = 0;             // 0: dont exit, 1: exit
 
     do
     {
+        // Get user input
         printf("#");
-        // Parsing:
         fgets(input, MAX_INPUTS, stdin);
+
+        // Delete input of '\n'
         input[strlen(input) - 1] = 0;
+
+        // Parse inputs for tokens with delimeters of ' '
         token_num = 0;
         char *input_address = input;
+
+        // Dictate which row to save in redirect matrix
+        row = 0;
+
         while (token = strtok_r(input_address, " ", &input_address))
         {
-            // printf("token: %s\n", token);
+            // Allocate memory for each token parsed
             args[token_num] = (char *)malloc((strlen(token) * sizeof(char)));
             args[token_num] = token;
+
+            // Cases to store location of redirects
+            redirect_idx[row][0] = (strcmp(args[token_num], "<") == 0) ? token_num : redirect_idx[row][0];
+            redirect_idx[row][1] = (strcmp(args[token_num], ">") == 0) ? token_num : redirect_idx[row][0];
+            redirect_idx[row][2] = (strcmp(args[token_num], "2>") == 0) ? token_num : redirect_idx[row][0];
+            row = (strcmp(args[token_num], "|") == 0) ? 1 : row;
+
+            // Increment number of tokens
             token_num++;
         }
+
+        // Set the last token to NULL for execvp to run
         args[token_num] = NULL;
 
+        // Check if user wants to exit
         if (strcmp(args[0], "exit") == 0)
         {
             exit_flag = 1;
         }
         else
         {
-            // Execute command:
+            // Create a child process
             child_pid = fork();
+
             if (child_pid == 0)
             {
+                // Execute command
                 execvp(args[0], args);
-                perror("mexecvp error\n");
+
+                // Error handling if child process doesn't terminate (Should remove for final submission)
+                perror("execvp error\n");
                 exit(1);
             }
             else if (child_pid > 0)
             {
+                // Wait for child process to finish running
                 int status;
                 waitpid(child_pid, &status, 0);
-
-                // if (WIFEXITED(status)){
-                //     for(i = 0; i < token_num; i++){
-                //         free(args[i]);
-                //     }
-                // } else {
-                //     printf("Child did not exit\n");
-                // }
-                // printf("Parent\n");
             }
             else
             {
+                // Fork error
                 perror("fork error\n");
             }
         }
     } while (!exit_flag);
 
-    // free(input);
+    // Free allocated memory
     free(token);
 }
 
-int test()
+int main()
 {
+    int file_descriptor;
+
+    char *data[] = {"ls", "<", "output.txt"};
+
+    file_descriptor = open("test_files/output.txt", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+
+    if (file_descriptor == -1)
+    {
+        perror("open");
+        exit(1);
+    }
+
+    if (dup2(file_descriptor, 1) == -1)
+    {
+        perror("dup2");
+        exit(1);
+    }
     pid_t child_pid;
-
-    char q[2000];
-    char a[2000];
-    fgets(q, sizeof(q), stdin);
-    fgets(a, sizeof(a), stdin);
-    int result;
-
     child_pid = fork();
+    char *args[] = {"ls", "-l", NULL};
     if (child_pid == 0)
     {
-        printf("Child process: My PID is %d\n", getpid());
-        if (strcmp(q, a) == 0)
-        {
-            printf("Success\n");
-            char *args[] = {"cat", "README.md", NULL};
-            result = execvp("cat", args);
-        }
-        else
-        {
-            printf("Fail\n");
-        }
+        execvp(args[0], args);
+        exit(1);
     }
     else if (child_pid > 0)
     {
-        printf("Parent process: My child's PID is %d\n", getpid());
+        int status;
+        waitpid(child_pid, &status, 0);
     }
     else
     {
-        printf("Fork failed!\n");
+        perror("fork error");
     }
-    printf("These are the results: %d\n", result);
+
+    close(file_descriptor);
     return 0;
 }
