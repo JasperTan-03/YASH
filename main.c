@@ -13,7 +13,7 @@
 #define MAX_TOKENS 1000
 #define MAX_ARG_CHARS 30
 
-int main2()
+int main()
 {
     pid_t child_pid;
     char input[MAX_INPUTS];
@@ -23,8 +23,17 @@ int main2()
     int i;
     int row;
     int token_num;
-    int redirect_idx[2][3] = {-1}; // 1st row: <, >, 2>; 2nd row: <, >, 2>;
-    int exit_flag = 0;             // 0: dont exit, 1: exit
+    int store_token_flag; // flag to stop storing tokens
+    // int redirect_idx[2][3] = {-1}; // 1st row: <, >, 2>; 2nd row: <, >, 2>;
+    int exit_flag = 0; // 0: dont exit, 1: exit
+
+    int redirect_input_flag = 0;  // idx of "<"
+    int redirect_output_flag = 0; // idx of ">"
+    int redirect_error_flag = 0;  // idx of "2>"
+    int input_file_descriptor = -1;
+    int output_file_descriptor = -1;
+    int error_file_descriptor = -1;
+    int prev_descriptor; // previous descriptor
 
     do
     {
@@ -42,20 +51,66 @@ int main2()
         // Dictate which row to save in redirect matrix
         row = 0;
 
+        // Set flag when token reaches a symbol
+        store_token_flag = 1;
+
+        // Parse Tokens in input
         while (token = strtok_r(input_address, " ", &input_address))
         {
-            // Allocate memory for each token parsed
-            args[token_num] = (char *)malloc((strlen(token) * sizeof(char)));
-            args[token_num] = token;
+            // Set off flag whenever one of the redirect tokens are parsed
+            store_token_flag = (strcmp(token, "<") == 0 || strcmp(token, ">") == 0 || strcmp(token, "2>") == 0) ? 0 : store_token_flag;
 
-            // Cases to store location of redirects
-            redirect_idx[row][0] = (strcmp(args[token_num], "<") == 0) ? token_num : redirect_idx[row][0];
-            redirect_idx[row][1] = (strcmp(args[token_num], ">") == 0) ? token_num : redirect_idx[row][0];
-            redirect_idx[row][2] = (strcmp(args[token_num], "2>") == 0) ? token_num : redirect_idx[row][0];
-            row = (strcmp(args[token_num], "|") == 0) ? 1 : row;
+            // Parse command
+            if (store_token_flag)
+            {
+                // Allocate memory for each token parsed
+                args[token_num] = (char *)malloc((strlen(token) * sizeof(char)));
+                args[token_num] = token;
 
-            // Increment number of tokens
-            token_num++;
+                // Increment number of tokens
+                token_num++;
+            }
+            else
+            {
+                // Depeneding on which redirect flag, open corresponding file descriptor
+                if (redirect_input_flag)
+                {
+                    input_file_descriptor = open(token, O_RDONLY);
+                    if (input_file_descriptor == -1)
+                    {
+                        perror("File descriptor error\n");
+                        exit(1);
+                    }
+                    redirect_input_flag = 0;
+                }
+                else if (redirect_output_flag)
+                {
+                    output_file_descriptor = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+                    if (output_file_descriptor == -1)
+                    {
+                        perror("File descriptor error\n");
+                        exit(1);
+                    }
+                    redirect_output_flag = 0;
+                }
+                else if (redirect_error_flag)
+                {
+                    error_file_descriptor = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+                    if (error_file_descriptor == -1)
+                    {
+                        perror("File descriptor error\n");
+                        exit(1);
+                    }
+                    redirect_error_flag = 0;
+                }
+                else
+                {
+                    // Set Flags when symbols are in token
+                    redirect_input_flag = (strcmp(token, "<") == 0) ? 1 : redirect_input_flag;
+                    redirect_output_flag = (strcmp(token, ">") == 0) ? 1 : redirect_output_flag;
+                    redirect_error_flag = (strcmp(token, "2>") == 0) ? 1 : redirect_error_flag;
+                }
+            }
         }
 
         // Set the last token to NULL for execvp to run
@@ -73,6 +128,32 @@ int main2()
 
             if (child_pid == 0)
             {
+                // Dup2 for the file redirects
+                if (input_file_descriptor != -1)
+                {
+                    if (dup2(input_file_descriptor, STDIN_FILENO) == -1)
+                    {
+                        perror("Dup2 STDIN error\n");
+                        exit(1);
+                    }
+                }
+                if (output_file_descriptor != -1)
+                {
+                    if (dup2(output_file_descriptor, STDOUT_FILENO) == -1)
+                    {
+                        perror("Dup2 STDOUT error\n");
+                        exit(1);
+                    }
+                }
+                if (error_file_descriptor != -1)
+                {
+                    if (dup2(error_file_descriptor, STDERR_FILENO) == -1)
+                    {
+                        perror("Dup2 STDERR error\n");
+                        exit(1);
+                    }
+                }
+
                 // Execute command
                 execvp(args[0], args);
 
@@ -85,6 +166,19 @@ int main2()
                 // Wait for child process to finish running
                 int status;
                 waitpid(child_pid, &status, 0);
+
+                // Close File descriptor
+                if (input_file_descriptor != -1)
+                    close(input_file_descriptor);
+                if (output_file_descriptor != -1)
+                    close(output_file_descriptor);
+                if (error_file_descriptor != -1)
+                    close(error_file_descriptor);
+
+                // Clear File descriptor
+                input_file_descriptor = -1;
+                output_file_descriptor = -1;
+                error_file_descriptor = -1;
             }
             else
             {
@@ -98,7 +192,7 @@ int main2()
     free(token);
 }
 
-int main()
+int main2()
 {
     int file_descriptor;
 
