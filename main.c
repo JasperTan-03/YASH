@@ -14,31 +14,34 @@
 #define MAX_TOKENS 1000
 #define MAX_ARG_CHARS 30
 
-void redirect_command(int file_descriptors[][3], char *args[]);
+void execute_command(int file_descriptors[][3], char *args[]);
 
-int file_descriptors[2][3] = {{-1, -1, -1}, {-1, -1, -1}};
+void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)]);
+
+void close_fd(int file_descriptors[][3]);
 
 int main()
 {
+    signal(SIGINT, SIG_DFL);
+    signal(SIGCHLD, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
     char input[MAX_INPUTS];
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
     char *command_args = (char *)malloc((MAX_INPUTS) * sizeof(char));
     char *args[2][MAX_TOKENS];
 
-    int i, j, k;
     int row;
     int token_num;
-    int store_token_flag; // flag to stop storing tokens
-    // int redirect_idx[2][3] = {-1}; // 1st row: <, >, 2>; 2nd row: <, >, 2>;
-    int exit_flag = 0; // 0: dont exit, 1: exit
+    int store_token_flag;  // flag to stop storing tokens
+    int exit_flag;         // 0: dont exit, 1: exit
+    int next_command_flag; // 0: countinue, 1: next token
 
     int redirect_input_flag = 0;  // idx of "<"
     int redirect_output_flag = 0; // idx of ">"
     int redirect_error_flag = 0;  // idx of "2>"
+    int file_descriptors[2][3] = {{-1, -1, -1}, {-1, -1, -1}};
 
     int prev_descriptor; // previous descriptor
-
-    int pipe_fd[2];
 
     do
     {
@@ -55,23 +58,39 @@ int main()
         // Dictate which row to save in arg matrix
         row = 0;
 
-        // Seperate commands
-        while (command_args = strtok_r(input_address, "|", &input_address))
+        // Reset Token count
+        token_num = 0;
+
+        // Set flag when token reaches a symbol
+        store_token_flag = 1;
+
+        // Set flag when file descriptor is incorrect
+        next_command_flag = 0;
+
+        // Parse Tokens in input
+        while (token = strtok_r(input_address, " ", &input_address))
         {
-            // Reset Token count
-            token_num = 0;
-
-            // Set flag when token reaches a symbol
-            store_token_flag = 1;
-
-            // Parse Tokens in input
-            while (token = strtok_r(command_args, " ", &command_args))
+            // If there is more than one pipe
+            if (row == 2)
             {
-                // If there is more than one pipe
-                if (row == 2)
-                {
-                    break;
-                }
+                break;
+            }
+            else if (strcmp(token, "|") == 0)
+            {
+                // Set flag when token reaches a symbol
+                store_token_flag = 1;
+
+                // Set the last token to NULL for execvp to run
+                args[row][token_num] = NULL;
+
+                // Increment row for next pipe
+                row++;
+
+                // Reset Token count
+                token_num = 0;
+            }
+            else
+            {
                 // Set off flag whenever one of the redirect tokens are parsed
                 store_token_flag = (strcmp(token, "<") == 0 || strcmp(token, ">") == 0 || strcmp(token, "2>") == 0) ? 0 : store_token_flag;
 
@@ -84,6 +103,9 @@ int main()
 
                     // Increment number of tokens
                     token_num++;
+
+                    // Set the last token to NULL for execvp to run
+                    args[row][token_num] = NULL;
                 }
                 else
                 {
@@ -93,9 +115,10 @@ int main()
                         file_descriptors[row][0] = open(token, O_RDONLY);
                         if (file_descriptors[row][0] == -1)
                         {
-                            perror("File descriptor error\n"); // Change the error to skip to next token
-                            exit(1);
+                            perror("no directory");
+                            next_command_flag = 1;
                         }
+
                         redirect_input_flag = 0;
                     }
                     else if (redirect_output_flag)
@@ -103,8 +126,8 @@ int main()
                         file_descriptors[row][1] = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
                         if (file_descriptors[row][1] == -1)
                         {
-                            perror("File descriptor error\n");
-                            exit(1);
+                            perror("no directory");
+                            next_command_flag = 1;
                         }
                         redirect_output_flag = 0;
                     }
@@ -113,9 +136,10 @@ int main()
                         file_descriptors[row][2] = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
                         if (file_descriptors[row][2] == -1)
                         {
-                            perror("File descriptor error\n");
-                            exit(1);
+                            perror("no directory");
+                            next_command_flag = 1;
                         }
+
                         redirect_error_flag = 0;
                     }
                     else
@@ -127,82 +151,23 @@ int main()
                     }
                 }
             }
-
-            // Set the last token to NULL for execvp to run
-            args[row][token_num] = NULL;
-
-            // Increment row for next pipe
-            row++;
         }
+        row++;
 
         // Check if user wants to exit
         if (strcmp(args[0][0], "exit") == 0)
         {
             exit_flag = 1;
         }
-        else if (row > 1)
+        else if (row > 1) // pipe
         {
-            // Pipe
-            if (pipe(pipe_fd) == -1)
-            {
-                perror("pipe");
-                exit(1);
-            }
-            pid_t cpid1 = fork();
-            if (cpid1 == 0)
-            {
-                // Close the read end of pipe
-                close(pipe_fd[0]);
-
-                // Dup2 to place output into pipe
-                if (file_descriptors[0][1] == -1)
-                {
-                    dup2(pipe_fd[1], STDOUT_FILENO);
-                }
-
-                // Close the write end of pipe
-                close(pipe_fd[1]);
-                redirect_command(&file_descriptors[0], args[0]);
-                exit(1);
-            }
-            else if (cpid1 > 0)
-            {
-                // Close the read end of pipe
-                close(pipe_fd[1]);
-
-                int status;
-                waitpid(cpid1, &status, 0);
-
-                pid_t cpid2 = fork();
-
-                if (cpid2 == 0)
-                {
-                    dup2(pipe_fd[0], STDIN_FILENO);
-                    close(pipe_fd[0]);
-                    redirect_command(&file_descriptors[1], args[1]);
-                    exit(1);
-                }
-                else if (cpid2 > 0)
-                {
-                    close(pipe_fd[0]);
-                    int status;
-                    waitpid(cpid2, &status, 0);
-                }
-                else
-                {
-                    // Fork error
-                    perror("fork error\n");
-                }
-            }
-            else
-            {
-                // Fork error
-                perror("fork error\n");
-            }
+            pipe_command(file_descriptors, args);
+            close_fd(file_descriptors);
         }
-        else
+        else if (!next_command_flag) // Regular command
         {
-            redirect_command(file_descriptors, args[0]);
+            execute_command(file_descriptors, args[0]);
+            close_fd(file_descriptors);
         }
     } while (!exit_flag);
 
@@ -210,7 +175,7 @@ int main()
     free(token);
 }
 
-void redirect_command(int file_descriptors[][3], char *args[])
+void execute_command(int file_descriptors[][3], char *args[])
 {
     pid_t cpid;
 
@@ -257,21 +222,101 @@ void redirect_command(int file_descriptors[][3], char *args[])
         // Wait for child process to finish running
         int status;
         waitpid(cpid, &status, 0);
+    }
+    else
+    {
+        // Fork error
+        perror("fork error\n");
+    }
+}
 
-        // Close File descriptor
-        for (int i = 0; i < 3; i++)
+void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)])
+{
+    // Create pipe
+    int pipe_fd[2];
+    if (pipe(pipe_fd) == -1)
+    {
+        perror("pipe");
+        exit(1);
+    }
+
+    // First fork
+    pid_t cpid1 = fork();
+    if (cpid1 == 0)
+    {
+        // Child process
+
+        // Close the read end of pipe
+        close(pipe_fd[0]);
+
+        // Place output into pipe only if nothing is overriding it
+        if (file_descriptors[0][1] == -1)
         {
-            if (file_descriptors[0][i] != -1)
+            dup2(pipe_fd[1], STDOUT_FILENO);
+        }
+
+        // Close the write end of pipe
+        close(pipe_fd[1]);
+
+        execute_command(&file_descriptors[0], args[0]);
+        exit(1);
+    }
+    else if (cpid1 > 0)
+    {
+        // Close the read end of pipe
+        close(pipe_fd[1]);
+
+        // Wait for first child process to finish
+        int status;
+        waitpid(cpid1, &status, 0);
+
+        // Another fork to run other side of pipe
+        pid_t cpid2 = fork();
+        if (cpid2 == 0)
+        {
+            // Get input from pipe based on if pipe was set by command
+            if (file_descriptors[1][0] == -1)
             {
-                close(file_descriptors[0][i]);
+                dup2(pipe_fd[0], STDIN_FILENO);
             }
-            // Clear File Descriptor
-            file_descriptors[0][i] = -1;
+
+            // Close pipe and execute command
+            close(pipe_fd[0]);
+            execute_command(&file_descriptors[1], args[1]);
+            exit(1);
+        }
+        else if (cpid2 > 0)
+        {
+            // Close pipes and wait for child process to finish
+            close(pipe_fd[0]);
+            int status;
+            waitpid(cpid2, &status, 0);
+        }
+        else
+        {
+            // Fork error
+            perror("fork error\n");
         }
     }
     else
     {
         // Fork error
         perror("fork error\n");
+    }
+}
+
+void close_fd(int file_descriptors[][3])
+{
+    // Close File descriptor
+    for (int i = 0; i < 2; i++)
+    {
+        for (int j = 0; j < 3; j++)
+        {
+            if (file_descriptors[i][j] != -1)
+            {
+                close(file_descriptors[i][j]);
+            }
+            file_descriptors[i][j] = -1;
+        }
     }
 }
