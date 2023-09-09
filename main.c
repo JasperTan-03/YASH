@@ -22,9 +22,9 @@ void close_fd(int file_descriptors[][3]);
 
 int main()
 {
-    signal(SIGINT, SIG_DFL);
-    signal(SIGCHLD, SIG_DFL);
-    signal(SIGTSTP, SIG_DFL);
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+
     char input[MAX_INPUTS];
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
     char *command_args = (char *)malloc((MAX_INPUTS) * sizeof(char));
@@ -35,6 +35,7 @@ int main()
     int store_token_flag;  // flag to stop storing tokens
     int exit_flag;         // 0: dont exit, 1: exit
     int next_command_flag; // 0: countinue, 1: next token
+    int no_token_flag;     // 1: no token, 0: token exist
 
     int redirect_input_flag = 0;  // idx of "<"
     int redirect_output_flag = 0; // idx of ">"
@@ -48,6 +49,12 @@ int main()
         // Get user input
         printf("#");
         fgets(input, MAX_INPUTS, stdin);
+
+        // Check for ctrl D
+        if (input[strlen(input) - 1] == '\0')
+        {
+            exit(1);
+        }
 
         // Delete input of '\n'
         input[strlen(input) - 1] = 0;
@@ -67,9 +74,13 @@ int main()
         // Set flag when file descriptor is incorrect
         next_command_flag = 0;
 
+        no_token_flag = 1;
+
         // Parse Tokens in input
         while (token = strtok_r(input_address, " ", &input_address))
         {
+            no_token_flag = 0;
+
             // If there is more than one pipe
             if (row == 2)
             {
@@ -155,19 +166,22 @@ int main()
         row++;
 
         // Check if user wants to exit
-        if (strcmp(args[0][0], "exit") == 0)
+        if (!no_token_flag)
         {
-            exit_flag = 1;
-        }
-        else if (row > 1) // pipe
-        {
-            pipe_command(file_descriptors, args);
-            close_fd(file_descriptors);
-        }
-        else if (!next_command_flag) // Regular command
-        {
-            execute_command(file_descriptors, args[0]);
-            close_fd(file_descriptors);
+            if (strcmp(args[0][0], "exit") == 0)
+            {
+                exit_flag = 1;
+            }
+            else if (row > 1) // pipe
+            {
+                pipe_command(file_descriptors, args);
+                close_fd(file_descriptors);
+            }
+            else if (!next_command_flag) // Regular command
+            {
+                execute_command(file_descriptors, args[0]);
+                close_fd(file_descriptors);
+            }
         }
     } while (!exit_flag);
 
@@ -184,6 +198,10 @@ void execute_command(int file_descriptors[][3], char *args[])
 
     if (cpid == 0)
     {
+        // Set the signal to default
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
+
         // Dup2 for the file redirects
         if (file_descriptors[0][0] != -1)
         {
@@ -245,6 +263,10 @@ void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)])
     if (cpid1 == 0)
     {
         // Child process
+
+        // Set the signal to default
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
 
         // Close the read end of pipe
         close(pipe_fd[0]);
