@@ -32,6 +32,8 @@ void pipe_command(Job *current_job);
 
 void close_fd(int file_descriptors[][3]);
 
+void update_job_list(Job job_list[20], int job_idx, int job_num);
+
 int main()
 {
     signal(SIGINT, SIG_IGN);
@@ -87,11 +89,17 @@ int main()
             {
                 pipe_command(&job_list[current_job_idx]);
                 close_fd(job_list[current_job_idx].file_descriptors);
+                update_job_list(job_list, current_job_idx, job_num);
+                job_num--;
+                printf("done");
             }
             else // Regular command
             {
                 execute_command(&job_list[current_job_idx], 0);
                 close_fd(job_list[current_job_idx].file_descriptors);
+                update_job_list(job_list, current_job_idx, job_num);
+                job_num--;
+                printf("done");
             }
         }
 
@@ -267,7 +275,10 @@ void execute_command(Job *current_job, int row_param)
     {
         // Wait for child process to finish running
         int status;
-        waitpid(cpid, &status, 0);
+        if (!current_job->background_flag)
+        {
+            waitpid(cpid, &status, 0);
+        }
     }
     else
     {
@@ -316,10 +327,6 @@ void pipe_command(Job *current_job)
         // Close the read end of pipe
         close(pipe_fd[1]);
 
-        // Wait for first child process to finish
-        int status;
-        waitpid(cpid1, &status, 0);
-
         // Another fork to run other side of pipe
         pid_t cpid2 = fork();
         if (cpid2 == 0)
@@ -340,7 +347,11 @@ void pipe_command(Job *current_job)
             // Close pipes and wait for child process to finish
             close(pipe_fd[0]);
             int status;
-            waitpid(cpid2, &status, 0);
+            if (!current_job->background_flag)
+            {
+                waitpid(cpid2, &status, 0);
+                waitpid(cpid1, &status, 0);
+            }
         }
         else
         {
@@ -368,5 +379,16 @@ void close_fd(int file_descriptors[][3])
             }
             file_descriptors[i][j] = -1;
         }
+    }
+}
+
+void update_job_list(Job job_list[20], int job_idx, int job_num)
+{
+    Job new_job;
+    job_list[job_idx] = new_job;
+
+    for (int i = job_idx; i < job_num - 1; i++)
+    {
+        job_list[i] = job_list[i + 1];
     }
 }
