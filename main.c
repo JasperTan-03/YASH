@@ -14,11 +14,21 @@
 #define MAX_TOKENS 1000
 #define MAX_ARG_CHARS 30
 
-void parse_input(char *input_address, int file_descriptors[][3], char *args[][MAX_TOKENS], int *output);
+typedef struct Job
+{
+    int row;
+    int next_command_flag;
+    int background_flag;
+    int job_order;
+    int file_descriptors[2][3];
+    char *args[2][MAX_TOKENS];
+} Job;
 
-void execute_command(int file_descriptors[][3], char *args[]);
+void parse_input(char *input_address, Job *current_job);
 
-void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)]);
+void execute_command(Job *current_job, int row_param);
+
+void pipe_command(Job *current_job);
 
 void close_fd(int file_descriptors[][3]);
 
@@ -29,29 +39,18 @@ int main()
 
     char input[MAX_INPUTS];
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
-    char *args[2][MAX_TOKENS];
 
-    int row;
-    int token_num;
-    int store_token_flag;  // flag to stop storing tokens
-    int exit_flag;         // 0: dont exit, 1: exit
-    int next_command_flag; // 0: countinue, 1: next token
-    int output_flags[2];
+    int exit_flag; // 0: dont exit, 1: exit
+    int output_flags[3];
 
-    int redirect_input_flag = 0;  // idx of "<"
-    int redirect_output_flag = 0; // idx of ">"
-    int redirect_error_flag = 0;  // idx of "2>"
-    int file_descriptors[2][3] = {{-1, -1, -1}, {-1, -1, -1}};
+    Job job_list[20];
+    int job_num = 0;
 
-    int prev_descriptor; // previous descriptor
-
-    struct Job
+    do
     {
-
-    } do
-    {
+        memset(input, 0, strlen(input));
         // Get user input
-        printf("#");
+        printf("# ");
         fgets(input, MAX_INPUTS, stdin);
 
         // Check for ctrl D
@@ -62,50 +61,54 @@ int main()
 
         // Delete input of '\n'
         input[strlen(input) - 1] = 0;
-
-        // Parse inputs for tokens with delimeters of ' '
         char *input_address = input;
 
-        parse_input(input_address, file_descriptors, args, output_flags);
+        // Initialize new Job
+        Job new_job = {};
+        memset(new_job.file_descriptors, -1, sizeof(new_job.file_descriptors));
+        new_job.job_order = job_num;
 
-        row = output_flags[0];
+        job_list[job_num] = new_job;
 
-        next_command_flag = output_flags[1];
+        int current_job_idx = job_num;
+        job_num++;
+
+        // Parse inputs for tokens with delimeters of ' '
+        parse_input(input_address, &job_list[current_job_idx]);
 
         // Check if user wants to exit
-        if (!next_command_flag)
+        if (!job_list[current_job_idx].next_command_flag)
         {
-            if (strcmp(args[0][0], "exit") == 0)
+            if (strcmp(job_list[current_job_idx].args[0][0], "exit") == 0)
             {
                 exit_flag = 1;
             }
-            else if (row > 1) // pipe
+            else if (job_list[current_job_idx].row > 1) // pipe
             {
-                pipe_command(file_descriptors, args);
-                close_fd(file_descriptors);
+                pipe_command(&job_list[current_job_idx]);
+                close_fd(job_list[current_job_idx].file_descriptors);
             }
             else // Regular command
             {
-                execute_command(file_descriptors, args[0]);
-                close_fd(file_descriptors);
+                execute_command(&job_list[current_job_idx], 0);
+                close_fd(job_list[current_job_idx].file_descriptors);
             }
         }
-    }
-    while (!exit_flag)
-        ;
+
+    } while (!exit_flag);
 
     // Free allocated memory
     free(token);
 }
 
-void parse_input(char *input_address, int file_descriptors[][3], char *args[][MAX_TOKENS], int output_flags[2])
+void parse_input(char *input_address, Job *current_job)
 {
     int redirect_input_flag = 0;  // idx of "<"
     int redirect_output_flag = 0; // idx of ">"
     int redirect_error_flag = 0;  // idx of "2>"
 
     // Dictate which row to save in arg matrix
-    int row = 0;
+    current_job->row = 0;
 
     // Reset Token count
     int token_num = 0;
@@ -114,16 +117,18 @@ void parse_input(char *input_address, int file_descriptors[][3], char *args[][MA
     int store_token_flag = 1;
 
     // Set flag when file descriptor is incorrect
-    int next_command_flag = 1;
+    current_job->next_command_flag = 1;
+
+    current_job->background_flag = 0;
 
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
     // Parse Tokens in input
     while (token = strtok_r(input_address, " ", &input_address))
     {
-        next_command_flag = 0;
+        current_job->next_command_flag = 0;
 
         // If there is more than one pipe
-        if (row == 2)
+        if (current_job->row == 2)
         {
             break;
         }
@@ -133,13 +138,17 @@ void parse_input(char *input_address, int file_descriptors[][3], char *args[][MA
             store_token_flag = 1;
 
             // Set the last token to NULL for execvp to run
-            args[row][token_num] = NULL;
+            current_job->args[current_job->row][token_num] = NULL;
 
             // Increment row for next pipe
-            row++;
+            current_job->row++;
 
             // Reset Token count
             token_num = 0;
+        }
+        else if (strcmp(token, "&") == 0)
+        {
+            current_job->background_flag = 1;
         }
         else
         {
@@ -150,46 +159,46 @@ void parse_input(char *input_address, int file_descriptors[][3], char *args[][MA
             if (store_token_flag)
             {
                 // Allocate memory for each token parsed
-                args[row][token_num] = (char *)malloc((strlen(token) * sizeof(char)));
-                args[row][token_num] = token;
+                current_job->args[current_job->row][token_num] = (char *)malloc((strlen(token) * sizeof(char)));
+                current_job->args[current_job->row][token_num] = token;
 
                 // Increment number of tokens
                 token_num++;
 
                 // Set the last token to NULL for execvp to run
-                args[row][token_num] = NULL;
+                current_job->args[current_job->row][token_num] = NULL;
             }
             else
             {
                 // Depeneding on which redirect flag, open corresponding file descriptor
                 if (redirect_input_flag)
                 {
-                    file_descriptors[row][0] = open(token, O_RDONLY);
-                    if (file_descriptors[row][0] == -1)
+                    current_job->file_descriptors[current_job->row][0] = open(token, O_RDONLY);
+                    if (current_job->file_descriptors[current_job->row][0] == -1)
                     {
                         perror("no directory");
-                        next_command_flag = 1;
+                        current_job->next_command_flag = 1;
                     }
 
                     redirect_input_flag = 0;
                 }
                 else if (redirect_output_flag)
                 {
-                    file_descriptors[row][1] = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-                    if (file_descriptors[row][1] == -1)
+                    current_job->file_descriptors[current_job->row][1] = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+                    if (current_job->file_descriptors[current_job->row][1] == -1)
                     {
                         perror("no directory");
-                        next_command_flag = 1;
+                        current_job->next_command_flag = 1;
                     }
                     redirect_output_flag = 0;
                 }
                 else if (redirect_error_flag)
                 {
-                    file_descriptors[row][2] = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-                    if (file_descriptors[row][2] == -1)
+                    current_job->file_descriptors[current_job->row][2] = open(token, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+                    if (current_job->file_descriptors[current_job->row][2] == -1)
                     {
                         perror("no directory");
-                        next_command_flag = 1;
+                        current_job->next_command_flag = 1;
                     }
 
                     redirect_error_flag = 0;
@@ -204,14 +213,11 @@ void parse_input(char *input_address, int file_descriptors[][3], char *args[][MA
             }
         }
     }
-    row++;
+    current_job->row++;
     free(token);
-
-    output_flags[0] = row;
-    output_flags[1] = next_command_flag;
 }
 
-void execute_command(int file_descriptors[][3], char *args[])
+void execute_command(Job *current_job, int row_param)
 {
     pid_t cpid;
 
@@ -225,25 +231,25 @@ void execute_command(int file_descriptors[][3], char *args[])
         signal(SIGTSTP, SIG_DFL);
 
         // Dup2 for the file redirects
-        if (file_descriptors[0][0] != -1)
+        if (current_job->file_descriptors[row_param][0] != -1)
         {
-            if (dup2(file_descriptors[0][0], STDIN_FILENO) == -1)
+            if (dup2(current_job->file_descriptors[row_param][0], STDIN_FILENO) == -1)
             {
                 perror("Dup2 STDIN error\n");
                 exit(1);
             }
         }
-        if (file_descriptors[0][1] != -1)
+        if (current_job->file_descriptors[row_param][1] != -1)
         {
-            if (dup2(file_descriptors[0][1], STDOUT_FILENO) == -1)
+            if (dup2(current_job->file_descriptors[row_param][1], STDOUT_FILENO) == -1)
             {
                 perror("Dup2 STDOUT error\n");
                 exit(1);
             }
         }
-        if (file_descriptors[0][2] != -1)
+        if (current_job->file_descriptors[row_param][2] != -1)
         {
-            if (dup2(file_descriptors[0][2], STDERR_FILENO) == -1)
+            if (dup2(current_job->file_descriptors[row_param][2], STDERR_FILENO) == -1)
             {
                 perror("Dup2 STDERR error\n");
                 exit(1);
@@ -251,10 +257,10 @@ void execute_command(int file_descriptors[][3], char *args[])
         }
 
         // Execute command
-        execvp(args[0], args);
+        execvp(current_job->args[row_param][0], current_job->args[row_param]);
 
         // Error handling if child process doesn't terminate (Should remove for final submission)
-        perror("execvp error\n");
+        // perror("execvp error\n");
         exit(1);
     }
     else if (cpid > 0)
@@ -270,7 +276,7 @@ void execute_command(int file_descriptors[][3], char *args[])
     }
 }
 
-void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)])
+void pipe_command(Job *current_job)
 {
     // Create pipe
     int pipe_fd[2];
@@ -294,7 +300,7 @@ void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)])
         close(pipe_fd[0]);
 
         // Place output into pipe only if nothing is overriding it
-        if (file_descriptors[0][1] == -1)
+        if (current_job->file_descriptors[0][1] == -1)
         {
             dup2(pipe_fd[1], STDOUT_FILENO);
         }
@@ -302,7 +308,7 @@ void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)])
         // Close the write end of pipe
         close(pipe_fd[1]);
 
-        execute_command(&file_descriptors[0], args[0]);
+        execute_command(current_job, 0);
         exit(1);
     }
     else if (cpid1 > 0)
@@ -319,14 +325,14 @@ void pipe_command(int file_descriptors[][3], char *args[][(MAX_TOKENS)])
         if (cpid2 == 0)
         {
             // Get input from pipe based on if pipe was set by command
-            if (file_descriptors[1][0] == -1)
+            if (current_job->file_descriptors[1][0] == -1)
             {
                 dup2(pipe_fd[0], STDIN_FILENO);
             }
 
             // Close pipe and execute command
             close(pipe_fd[0]);
-            execute_command(&file_descriptors[1], args[1]);
+            execute_command(current_job, 1);
             exit(1);
         }
         else if (cpid2 > 0)
