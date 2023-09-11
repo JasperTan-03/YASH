@@ -16,41 +16,51 @@
 
 typedef struct Job
 {
-    int row;
-    int next_command_flag;
-    int background_flag;
-    int job_order;
+    int row;               // number of rows (for pipe)
+    int next_command_flag; // 0: dont skip command, 1: skip command
+    int background_flag;   // 0: foreground, 1: background
+    int job_completed;     // 0: incomplete, 1: complete
+    pid_t job_pid;
+    int job_order; // Number to print for job number
+    char input[MAX_INPUTS];
     int file_descriptors[2][3];
     char *args[2][MAX_TOKENS];
 } Job;
+
+Job bg_job_list[20];
+int bg_job_num = 1;
+int bg_job_idx = 0;
 
 void parse_input(char *input_address, Job *current_job);
 
 void execute_command(Job *current_job, int row_param);
 
+void single_command(Job *current_job);
+
 void pipe_command(Job *current_job);
 
 void close_fd(int file_descriptors[][3]);
 
-void update_job_list(Job job_list[20], int job_idx, int job_num);
+void update_job_list(int del_idx);
+
+void check_completed_jobs();
 
 int main()
 {
     signal(SIGINT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
 
-    char input[MAX_INPUTS];
+    // char input[MAX_INPUTS];
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
+    char input[MAX_INPUTS];
 
     int exit_flag; // 0: dont exit, 1: exit
     int output_flags[3];
 
-    Job job_list[20];
-    int job_num = 0;
-
     do
     {
         memset(input, 0, strlen(input));
+
         // Get user input
         printf("# ");
         fgets(input, MAX_INPUTS, stdin);
@@ -66,42 +76,45 @@ int main()
         char *input_address = input;
 
         // Initialize new Job
-        Job new_job = {};
-        memset(new_job.file_descriptors, -1, sizeof(new_job.file_descriptors));
-        new_job.job_order = job_num;
-
-        job_list[job_num] = new_job;
-
-        int current_job_idx = job_num;
-        job_num++;
+        Job fg_job = {};
+        memset(fg_job.file_descriptors, -1, sizeof(fg_job.file_descriptors));
+        fg_job.job_completed = 0;
 
         // Parse inputs for tokens with delimeters of ' '
-        parse_input(input_address, &job_list[current_job_idx]);
+        parse_input(input_address, &fg_job);
+
+        Job *current_job;
+        current_job = fg_job.background_flag ? &bg_job_list[bg_job_idx - 1] : &fg_job;
 
         // Check if user wants to exit
-        if (!job_list[current_job_idx].next_command_flag)
+        if (!current_job->next_command_flag)
         {
-            if (strcmp(job_list[current_job_idx].args[0][0], "exit") == 0)
+            if (strcmp(current_job->args[0][0], "exit") == 0)
             {
                 exit_flag = 1;
             }
-            else if (job_list[current_job_idx].row > 1) // pipe
+            else if (current_job->row > 1) // pipe
             {
-                pipe_command(&job_list[current_job_idx]);
-                close_fd(job_list[current_job_idx].file_descriptors);
-                update_job_list(job_list, current_job_idx, job_num);
-                job_num--;
-                printf("done");
+                pipe_command(current_job);
+                if (current_job->background_flag != 1)
+                {
+                    close_fd(current_job->file_descriptors);
+                }
+                // update_job_list(bg_job_list, current_job_idx, job_num);
+                // job_num--;
             }
             else // Regular command
             {
-                execute_command(&job_list[current_job_idx], 0);
-                close_fd(job_list[current_job_idx].file_descriptors);
-                update_job_list(job_list, current_job_idx, job_num);
-                job_num--;
-                printf("done");
+                single_command(current_job);
+                if (current_job->background_flag != 1)
+                {
+                    close_fd(current_job->file_descriptors);
+                }
+                // update_job_list(bg_job_list, current_job_idx, job_num);
+                // job_num--;
             }
         }
+        check_completed_jobs();
 
     } while (!exit_flag);
 
@@ -157,6 +170,11 @@ void parse_input(char *input_address, Job *current_job)
         else if (strcmp(token, "&") == 0)
         {
             current_job->background_flag = 1;
+            current_job->job_order = bg_job_num;
+            bg_job_list[bg_job_idx] = *current_job;
+            bg_job_list[bg_job_idx].row++;
+            bg_job_idx++;
+            bg_job_num++;
         }
         else
         {
@@ -220,6 +238,8 @@ void parse_input(char *input_address, Job *current_job)
                 }
             }
         }
+        strcat(current_job->input, token);
+        strcat(current_job->input, " ");
     }
     current_job->row++;
     free(token);
@@ -227,57 +247,62 @@ void parse_input(char *input_address, Job *current_job)
 
 void execute_command(Job *current_job, int row_param)
 {
-    pid_t cpid;
 
+    // Dup2 for the file redirects
+    if (current_job->file_descriptors[row_param][0] != -1)
+    {
+        if (dup2(current_job->file_descriptors[row_param][0], STDIN_FILENO) == -1)
+        {
+            perror("Dup2 STDIN error\n");
+            exit(1);
+        }
+    }
+    if (current_job->file_descriptors[row_param][1] != -1)
+    {
+        if (dup2(current_job->file_descriptors[row_param][1], STDOUT_FILENO) == -1)
+        {
+            perror("Dup2 STDOUT error\n");
+            exit(1);
+        }
+    }
+    if (current_job->file_descriptors[row_param][2] != -1)
+    {
+        if (dup2(current_job->file_descriptors[row_param][2], STDERR_FILENO) == -1)
+        {
+            perror("Dup2 STDERR error\n");
+            exit(1);
+        }
+    }
+
+    // Execute command
+    execvp(current_job->args[row_param][0], current_job->args[row_param]);
+
+    // Error handling if child process doesn't terminate (Should remove for final submission)
+    // perror("execvp error\n");
+    exit(1);
+}
+
+void single_command(Job *current_job)
+{
     // Create a child process
-    cpid = fork();
-
+    pid_t cpid = fork();
     if (cpid == 0)
     {
         // Set the signal to default
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
-
-        // Dup2 for the file redirects
-        if (current_job->file_descriptors[row_param][0] != -1)
-        {
-            if (dup2(current_job->file_descriptors[row_param][0], STDIN_FILENO) == -1)
-            {
-                perror("Dup2 STDIN error\n");
-                exit(1);
-            }
-        }
-        if (current_job->file_descriptors[row_param][1] != -1)
-        {
-            if (dup2(current_job->file_descriptors[row_param][1], STDOUT_FILENO) == -1)
-            {
-                perror("Dup2 STDOUT error\n");
-                exit(1);
-            }
-        }
-        if (current_job->file_descriptors[row_param][2] != -1)
-        {
-            if (dup2(current_job->file_descriptors[row_param][2], STDERR_FILENO) == -1)
-            {
-                perror("Dup2 STDERR error\n");
-                exit(1);
-            }
-        }
-
-        // Execute command
-        execvp(current_job->args[row_param][0], current_job->args[row_param]);
-
-        // Error handling if child process doesn't terminate (Should remove for final submission)
-        // perror("execvp error\n");
-        exit(1);
+        execute_command(current_job, 0);
     }
     else if (cpid > 0)
     {
+        current_job->job_pid = cpid;
         // Wait for child process to finish running
         int status;
+
+        // Determine what to do depending on background or foreground
         if (!current_job->background_flag)
         {
-            waitpid(cpid, &status, 0);
+            waitpid(current_job->job_pid, &status, WUNTRACED);
         }
     }
     else
@@ -298,10 +323,18 @@ void pipe_command(Job *current_job)
     }
 
     // First fork
+    // current_job->job_pid = fork();
     pid_t cpid1 = fork();
     if (cpid1 == 0)
     {
         // Child process
+
+        // Set pgid
+        if (setpgid(0, 0) < 0)
+        {
+            perror("setpgid");
+            exit(1);
+        }
 
         // Set the signal to default
         signal(SIGINT, SIG_DFL);
@@ -311,7 +344,7 @@ void pipe_command(Job *current_job)
         close(pipe_fd[0]);
 
         // Place output into pipe only if nothing is overriding it
-        if (current_job->file_descriptors[0][1] == -1)
+        if (current_job->file_descriptors[0][1] == -1 || current_job->file_descriptors[0][2] == -1)
         {
             dup2(pipe_fd[1], STDOUT_FILENO);
         }
@@ -327,10 +360,19 @@ void pipe_command(Job *current_job)
         // Close the read end of pipe
         close(pipe_fd[1]);
 
+        current_job->job_pid = cpid1;
+
         // Another fork to run other side of pipe
         pid_t cpid2 = fork();
         if (cpid2 == 0)
         {
+            // Set pgid
+            if (setpgid(0, current_job->job_pid) < 0)
+            {
+                perror("setpgid");
+                exit(1);
+            }
+
             // Get input from pipe based on if pipe was set by command
             if (current_job->file_descriptors[1][0] == -1)
             {
@@ -347,10 +389,18 @@ void pipe_command(Job *current_job)
             // Close pipes and wait for child process to finish
             close(pipe_fd[0]);
             int status;
+            // Determine what to do depending on background or foreground
             if (!current_job->background_flag)
             {
-                waitpid(cpid2, &status, 0);
-                waitpid(cpid1, &status, 0);
+                waitpid(current_job->job_pid, &status, WUNTRACED);
+            }
+            else
+            {
+                waitpid(current_job->job_pid, &status, WNOHANG);
+                if (WIFEXITED(status))
+                {
+                    current_job->job_completed = 1;
+                }
             }
         }
         else
@@ -382,13 +432,46 @@ void close_fd(int file_descriptors[][3])
     }
 }
 
-void update_job_list(Job job_list[20], int job_idx, int job_num)
+void update_job_list(int del_idx)
 {
-    Job new_job;
-    job_list[job_idx] = new_job;
-
-    for (int i = job_idx; i < job_num - 1; i++)
+    Job new_job1, new_job2;
+    bg_job_list[del_idx] = new_job1;
+    for (int i = del_idx; i < bg_job_idx - 1; i++)
     {
-        job_list[i] = job_list[i + 1];
+        bg_job_list[i] = bg_job_list[i + 1];
     }
+    bg_job_list[bg_job_idx] = new_job2;
+}
+
+void check_completed_jobs()
+{
+    int changes = 0;
+    for (int i = 0; i < bg_job_idx; i++)
+    {
+        int status;
+        int result = waitpid(bg_job_list[i].job_pid, &status, WNOHANG);
+        if (result == -1)
+        {
+            perror("completed jobs error");
+        }
+        else
+        {
+            if (WIFEXITED(status))
+            {
+                if (bg_job_list[i].job_order >= bg_job_idx)
+                {
+                    printf("[%d]+ Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
+                }
+                else
+                {
+                    printf("[%d]- Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
+                }
+                close_fd(bg_job_list[i].file_descriptors);
+                update_job_list(i);
+                changes++;
+            }
+        }
+    }
+    bg_job_idx -= changes;
+    bg_job_num -= changes;
 }
