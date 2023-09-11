@@ -68,6 +68,7 @@ int main()
         // Check for ctrl D
         if (input_temp[strlen(input_temp) - 1] == '\0')
         {
+            printf("\n");
             exit(1);
         }
 
@@ -298,17 +299,39 @@ void single_command(Job *current_job)
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
         execute_command(current_job, 0);
+        exit(1);
     }
     else if (cpid > 0)
     {
         current_job->job_pid = cpid;
         // Wait for child process to finish running
-        int status;
-
         // Determine what to do depending on background or foreground
         if (!current_job->background_flag)
         {
-            waitpid((current_job->job_pid), &status, WUNTRACED);
+            int status;
+
+            int result = waitpid((current_job->job_pid), &status, WUNTRACED);
+            if (result > 0)
+            {
+                if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTSTP))
+                {
+                    if (kill(current_job->job_pid, SIGSTOP) != 0)
+                    {
+                        perror("PAUSE ERROR");
+                    }
+                    current_job->job_status = 0;
+                    current_job->background_flag = 1;
+                    current_job->job_order = bg_job_num;
+                    bg_job_list[bg_job_idx] = *current_job;
+                    bg_job_idx++;
+                    bg_job_num++;
+                    printf("\n");
+                }
+            }
+            else if (result <= -1)
+            {
+                perror("WIFSTOPPED ERROR");
+            }
         }
     }
     else
@@ -362,7 +385,7 @@ void pipe_command(Job *current_job)
         // Set pgid
         if (setpgid(cpid1, cpid1) < 0)
         {
-            perror("setpgid");
+            perror("SET PGID ERROR");
             exit(1);
         }
 
@@ -372,6 +395,10 @@ void pipe_command(Job *current_job)
         pid_t cpid2 = fork();
         if (cpid2 == 0)
         {
+            // Set the signal to default
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+
             // Get input from pipe based on if pipe was set by command
             if (current_job->file_descriptors[1][0] == -1)
             {
@@ -391,17 +418,39 @@ void pipe_command(Job *current_job)
             // Set pgid
             if (setpgid(cpid2, current_job->job_pid) < 0)
             {
-                perror("setpgid");
+                perror("JOIN PGID ERROR");
                 exit(1);
             }
 
-            int status;
             // Determine what to do depending on background or foreground
             if (!current_job->background_flag)
             {
+                int result;
+                int status;
                 for (int i = 0; i < current_job->row; i++)
                 {
-                    waitpid(-(current_job->job_pid), &status, WUNTRACED);
+                    result = waitpid(-(current_job->job_pid), &status, WUNTRACED);
+                    if (result > 0)
+                    {
+                        if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTSTP))
+                        {
+                            if (kill(current_job->job_pid, SIGSTOP) != 0)
+                            {
+                                perror("PAUSE ERROR");
+                            }
+                            current_job->job_status = 0;
+                            current_job->background_flag = 1;
+                            current_job->job_order = bg_job_num;
+                            bg_job_list[bg_job_idx] = *current_job;
+                            bg_job_idx++;
+                            bg_job_num++;
+                            printf("\n");
+                        }
+                    }
+                    else if (result <= -1)
+                    {
+                        perror("WIFSTOPPED ERROR");
+                    }
                 }
             }
         }
@@ -459,14 +508,11 @@ void check_completed_jobs(int jobs_flag)
     {
         int status;
         int result = waitpid(bg_job_list[i].job_pid, &status, WNOHANG);
-        if (result == -1)
+        if (result <= -1)
         {
             perror("completed jobs error");
         }
-        else if (result == 0)
-        {
-        }
-        else
+        else if (result > 0)
         {
             if (WIFEXITED(status))
             {
