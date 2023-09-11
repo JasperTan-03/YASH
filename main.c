@@ -19,7 +19,7 @@ typedef struct Job
     int row;               // number of rows (for pipe)
     int next_command_flag; // 0: dont skip command, 1: skip command
     int background_flag;   // 0: foreground, 1: background
-    int job_completed;     // 0: incomplete, 1: complete
+    int job_status;        // 0: stopped, 1: running, 2: done
     pid_t job_pid;
     int job_order; // Number to print for job number
     char input[MAX_INPUTS];
@@ -52,33 +52,33 @@ int main()
 
     // char input[MAX_INPUTS];
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
-    char input[MAX_INPUTS];
+    char input_temp[MAX_INPUTS];
 
     int exit_flag; // 0: dont exit, 1: exit
-    int output_flags[3];
+    int jobs_flag;
 
     do
     {
-        memset(input, 0, strlen(input));
+        memset(input_temp, 0, strlen(input_temp));
 
         // Get user input
         printf("# ");
-        fgets(input, MAX_INPUTS, stdin);
+        fgets(input_temp, (MAX_INPUTS), stdin);
 
         // Check for ctrl D
-        if (input[strlen(input) - 1] == '\0')
+        if (input_temp[strlen(input_temp) - 1] == '\0')
         {
             exit(1);
         }
 
         // Delete input of '\n'
-        input[strlen(input) - 1] = 0;
-        char *input_address = input;
+        input_temp[strlen(input_temp) - 1] = 0;
+        char *input_address = input_temp;
 
         // Initialize new Job
         Job fg_job = {};
         memset(fg_job.file_descriptors, -1, sizeof(fg_job.file_descriptors));
-        fg_job.job_completed = 0;
+        fg_job.job_status = 0;
 
         // Parse inputs for tokens with delimeters of ' '
         parse_input(input_address, &fg_job);
@@ -86,12 +86,18 @@ int main()
         Job *current_job;
         current_job = fg_job.background_flag ? &bg_job_list[bg_job_idx - 1] : &fg_job;
 
+        jobs_flag = 0;
+        current_job->job_status = 1;
         // Check if user wants to exit
         if (!current_job->next_command_flag)
         {
             if (strcmp(current_job->args[0][0], "exit") == 0)
             {
                 exit_flag = 1;
+            }
+            else if (strcmp(current_job->args[0][0], "jobs") == 0)
+            {
+                jobs_flag = 1;
             }
             else if (current_job->row > 1) // pipe
             {
@@ -114,7 +120,7 @@ int main()
                 // job_num--;
             }
         }
-        check_completed_jobs();
+        check_completed_jobs(jobs_flag);
 
     } while (!exit_flag);
 
@@ -185,8 +191,8 @@ void parse_input(char *input_address, Job *current_job)
             if (store_token_flag)
             {
                 // Allocate memory for each token parsed
-                current_job->args[current_job->row][token_num] = (char *)malloc((strlen(token) * sizeof(char)));
-                current_job->args[current_job->row][token_num] = token;
+                current_job->args[current_job->row][token_num] = (char *)malloc((strlen(token) + 1 * sizeof(char)));
+                strcpy(current_job->args[current_job->row][token_num], token);
 
                 // Increment number of tokens
                 token_num++;
@@ -394,14 +400,6 @@ void pipe_command(Job *current_job)
             {
                 waitpid(current_job->job_pid, &status, WUNTRACED);
             }
-            else
-            {
-                waitpid(current_job->job_pid, &status, WNOHANG);
-                if (WIFEXITED(status))
-                {
-                    current_job->job_completed = 1;
-                }
-            }
         }
         else
         {
@@ -432,20 +430,23 @@ void close_fd(int file_descriptors[][3])
     }
 }
 
-void update_job_list(int del_idx)
+void update_job_list(int del_idx) // FIX NUMBERIN SYSTEM
 {
-    Job new_job1, new_job2;
-    bg_job_list[del_idx] = new_job1;
     for (int i = del_idx; i < bg_job_idx - 1; i++)
     {
         bg_job_list[i] = bg_job_list[i + 1];
     }
-    bg_job_list[bg_job_idx] = new_job2;
+    bg_job_idx--;
+    if (del_idx == bg_job_num - 1)
+    {
+        bg_job_num = bg_job_list[bg_job_idx - 1].job_order + 1;
+    }
 }
 
-void check_completed_jobs()
+void check_completed_jobs(int jobs_flag)
 {
-    int changes = 0;
+    int delete_idxs[20];
+    int delete_num = 0;
     for (int i = 0; i < bg_job_idx; i++)
     {
         int status;
@@ -454,24 +455,66 @@ void check_completed_jobs()
         {
             perror("completed jobs error");
         }
+        else if (result == 0)
+        {
+        }
         else
         {
             if (WIFEXITED(status))
             {
-                if (bg_job_list[i].job_order >= bg_job_idx)
+                if (jobs_flag)
                 {
-                    printf("[%d]+ Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
+                    bg_job_list[i].job_status = 2;
+                    close_fd(bg_job_list[i].file_descriptors);
+                    delete_idxs[delete_num] = i;
+                    delete_num++;
                 }
                 else
                 {
-                    printf("[%d]- Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
+                    if ((i + 1) == bg_job_idx) //(bg_job_list[i].job_order >= bg_job_num)
+                    {
+                        printf("[%d]+ Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
+                    }
+                    else
+                    {
+                        printf("[%d]- Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
+                    }
+                    close_fd(bg_job_list[i].file_descriptors);
+                    delete_idxs[delete_num] = i;
+                    delete_num++;
                 }
-                close_fd(bg_job_list[i].file_descriptors);
-                update_job_list(i);
-                changes++;
+            }
+        }
+        if (jobs_flag)
+        {
+            char *status;
+            switch (bg_job_list[i].job_status)
+            {
+            case 0:
+                status = "Stopped";
+                break;
+            case 1:
+                status = "Running";
+                break;
+            case 2:
+                status = "Done";
+                break;
+            default:
+                perror("job status error");
+                exit(5);
+            }
+            if ((i + 1) == bg_job_idx) //(bg_job_list[i].job_order >= bg_job_num)
+            {
+                printf("[%d]+ %s \t\t %s\n", bg_job_list[i].job_order, status, bg_job_list[i].input);
+            }
+            else
+            {
+                printf("[%d]- %s \t\t %s\n", bg_job_list[i].job_order, status, bg_job_list[i].input);
             }
         }
     }
-    bg_job_idx -= changes;
-    bg_job_num -= changes;
+    for (int i = delete_num - 1; i >= 0; i--)
+    {
+        update_job_list(delete_idxs[i]);
+    }
 }
