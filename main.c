@@ -308,7 +308,7 @@ void single_command(Job *current_job)
         // Determine what to do depending on background or foreground
         if (!current_job->background_flag)
         {
-            waitpid(current_job->job_pid, &status, WUNTRACED);
+            waitpid((current_job->job_pid), &status, WUNTRACED);
         }
     }
     else
@@ -335,13 +335,6 @@ void pipe_command(Job *current_job)
     {
         // Child process
 
-        // Set pgid
-        if (setpgid(0, 0) < 0)
-        {
-            perror("setpgid");
-            exit(1);
-        }
-
         // Set the signal to default
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
@@ -366,19 +359,19 @@ void pipe_command(Job *current_job)
         // Close the read end of pipe
         close(pipe_fd[1]);
 
+        // Set pgid
+        if (setpgid(cpid1, cpid1) < 0)
+        {
+            perror("setpgid");
+            exit(1);
+        }
+
         current_job->job_pid = cpid1;
 
         // Another fork to run other side of pipe
         pid_t cpid2 = fork();
         if (cpid2 == 0)
         {
-            // Set pgid
-            if (setpgid(0, current_job->job_pid) < 0)
-            {
-                perror("setpgid");
-                exit(1);
-            }
-
             // Get input from pipe based on if pipe was set by command
             if (current_job->file_descriptors[1][0] == -1)
             {
@@ -394,11 +387,22 @@ void pipe_command(Job *current_job)
         {
             // Close pipes and wait for child process to finish
             close(pipe_fd[0]);
+
+            // Set pgid
+            if (setpgid(cpid2, current_job->job_pid) < 0)
+            {
+                perror("setpgid");
+                exit(1);
+            }
+
             int status;
             // Determine what to do depending on background or foreground
             if (!current_job->background_flag)
             {
-                waitpid(current_job->job_pid, &status, WUNTRACED);
+                for (int i = 0; i < current_job->row; i++)
+                {
+                    waitpid(-(current_job->job_pid), &status, WUNTRACED);
+                }
             }
         }
         else
