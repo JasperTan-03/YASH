@@ -45,6 +45,10 @@ void update_job_list(int del_idx);
 
 void check_completed_jobs(int jobs_flag);
 
+void foreground_command();
+
+void background_command();
+
 int main()
 {
     signal(SIGINT, SIG_IGN);
@@ -99,6 +103,14 @@ int main()
             else if (strcmp(current_job->args[0][0], "jobs") == 0)
             {
                 jobs_flag = 1;
+            }
+            else if (strcmp(current_job->args[0][0], "fg") == 0)
+            {
+                foreground_command();
+            }
+            else if (strcmp(current_job->args[0][0], "bg") == 0)
+            {
+                background_command();
             }
             else if (current_job->row > 1) // pipe
             {
@@ -155,6 +167,8 @@ void parse_input(char *input_address, Job *current_job)
     {
         current_job->next_command_flag = 0;
 
+        strcat(current_job->input, token);
+        strcat(current_job->input, " ");
         // If there is more than one pipe
         if (current_job->row == 2)
         {
@@ -245,8 +259,6 @@ void parse_input(char *input_address, Job *current_job)
                 }
             }
         }
-        strcat(current_job->input, token);
-        strcat(current_job->input, " ");
     }
     current_job->row++;
     free(token);
@@ -308,6 +320,12 @@ void single_command(Job *current_job)
         // Determine what to do depending on background or foreground
         if (!current_job->background_flag)
         {
+            // signal(SIGTTOU, SIG_IGN);
+
+            // tcsetpgrp(STDIN_FILENO, current_job->job_pid);
+            // tcsetpgrp(STDOUT_FILENO, current_job->job_pid);
+            // tcsetpgrp(STDERR_FILENO, current_job->job_pid);
+
             int status;
 
             int result = waitpid((current_job->job_pid), &status, WUNTRACED);
@@ -315,23 +333,25 @@ void single_command(Job *current_job)
             {
                 if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTSTP))
                 {
-                    if (kill(current_job->job_pid, SIGSTOP) != 0)
-                    {
-                        perror("PAUSE ERROR");
-                    }
+                    // if (kill(current_job->job_pid, SIGSTOP) != 0)
+                    // {
+                    //     perror("PAUSE ERROR");
+                    // }
                     current_job->job_status = 0;
                     current_job->background_flag = 1;
                     current_job->job_order = bg_job_num;
                     bg_job_list[bg_job_idx] = *current_job;
                     bg_job_idx++;
                     bg_job_num++;
-                    printf("\n");
                 }
             }
             else if (result <= -1)
             {
                 perror("WIFSTOPPED ERROR");
             }
+            // tcsetpgrp(STDIN_FILENO, getpid());
+            // tcsetpgrp(STDOUT_FILENO, getpid());
+            // tcsetpgrp(STDERR_FILENO, getpid());
         }
     }
     else
@@ -425,8 +445,15 @@ void pipe_command(Job *current_job)
             // Determine what to do depending on background or foreground
             if (!current_job->background_flag)
             {
+                signal(SIGTTOU, SIG_IGN);
+
+                tcsetpgrp(STDIN_FILENO, current_job->job_pid);
+                tcsetpgrp(STDOUT_FILENO, current_job->job_pid);
+                tcsetpgrp(STDERR_FILENO, current_job->job_pid);
+
                 int result;
                 int status;
+                int stop_flag = 0;
                 for (int i = 0; i < current_job->row; i++)
                 {
                     result = waitpid(-(current_job->job_pid), &status, WUNTRACED);
@@ -434,23 +461,26 @@ void pipe_command(Job *current_job)
                     {
                         if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTSTP))
                         {
-                            if (kill(current_job->job_pid, SIGSTOP) != 0)
-                            {
-                                perror("PAUSE ERROR");
-                            }
-                            current_job->job_status = 0;
-                            current_job->background_flag = 1;
-                            current_job->job_order = bg_job_num;
-                            bg_job_list[bg_job_idx] = *current_job;
-                            bg_job_idx++;
-                            bg_job_num++;
-                            printf("\n");
+                            stop_flag++;
                         }
                     }
                     else if (result <= -1)
                     {
                         perror("WIFSTOPPED ERROR");
                     }
+                }
+                tcsetpgrp(STDIN_FILENO, getpgrp());
+                tcsetpgrp(STDOUT_FILENO, getpgrp());
+                tcsetpgrp(STDERR_FILENO, getpgrp());
+
+                if (stop_flag)
+                {
+                    current_job->job_status = 0;
+                    current_job->background_flag = 1;
+                    current_job->job_order = bg_job_num;
+                    bg_job_list[bg_job_idx] = *current_job;
+                    bg_job_idx++;
+                    bg_job_num++;
                 }
             }
         }
@@ -510,7 +540,7 @@ void check_completed_jobs(int jobs_flag)
         int result = waitpid(bg_job_list[i].job_pid, &status, WNOHANG);
         if (result <= -1)
         {
-            perror("completed jobs error");
+            // perror("completed jobs error");
         }
         else if (result > 0)
         {
@@ -533,6 +563,7 @@ void check_completed_jobs(int jobs_flag)
                     {
                         printf("[%d]- Done \t\t %s\n", bg_job_list[i].job_order, bg_job_list[i].input);
                     }
+                    bg_job_list[i].job_status = 2;
                     close_fd(bg_job_list[i].file_descriptors);
                     delete_idxs[delete_num] = i;
                     delete_num++;
@@ -571,4 +602,112 @@ void check_completed_jobs(int jobs_flag)
     {
         update_job_list(delete_idxs[i]);
     }
+}
+
+void foreground_command()
+{
+    for (int i = bg_job_idx - 1; i >= 0; i--)
+    {
+        if (bg_job_list[i].job_status == 1 || bg_job_list[i].job_status == 0)
+        {
+            int status;
+            int result = waitpid(bg_job_list[i].job_pid, &status, WNOHANG);
+            if (result <= -1)
+            {
+                perror("FOREGROUND ERROR");
+            }
+            else if (result == 0 && WIFEXITED(status))
+            {
+                Job current_job = bg_job_list[i];
+                update_job_list(i);
+                current_job.background_flag = 0;
+
+                kill(current_job.job_pid, SIGCONT);
+                current_job.job_status = 1;
+
+                if (current_job.row == 1)
+                {
+                    // Wait for foreground to finish
+                    result = waitpid((current_job.job_pid), &status, WUNTRACED);
+                    if (result > 0)
+                    {
+                        if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTSTP))
+                        {
+                            current_job.job_status = 0;
+                            current_job.background_flag = 1;
+                            current_job.job_order = bg_job_num;
+                            bg_job_list[bg_job_idx] = current_job;
+                            bg_job_idx++;
+                            bg_job_num++;
+                        }
+                    }
+                    else
+                    {
+                        perror("FOREGROUND WIFSTOPPED ERROR");
+                    }
+                    if (current_job.background_flag != 1)
+                    {
+                        close_fd(current_job.file_descriptors);
+                        printf("%s\n", current_job.input);
+                    }
+                    return;
+                }
+                else
+                {
+                    signal(SIGTTOU, SIG_IGN);
+
+                    tcsetpgrp(STDIN_FILENO, current_job.job_pid);
+                    tcsetpgrp(STDOUT_FILENO, current_job.job_pid);
+                    tcsetpgrp(STDERR_FILENO, current_job.job_pid);
+
+                    result;
+                    status;
+                    int stop_flag = 0;
+                    for (int i = 0; i < current_job.row; i++)
+                    {
+                        result = waitpid(-(current_job.job_pid), &status, WUNTRACED);
+                        if (result > 0)
+                        {
+                            if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTSTP))
+                            {
+                                stop_flag++;
+                            }
+                        }
+                        else if (result <= -1)
+                        {
+                            perror("WIFSTOPPED ERROR");
+                        }
+                    }
+                    tcsetpgrp(STDIN_FILENO, getpgrp());
+                    tcsetpgrp(STDOUT_FILENO, getpgrp());
+                    tcsetpgrp(STDERR_FILENO, getpgrp());
+
+                    if (stop_flag)
+                    {
+                        current_job.job_status = 0;
+                        current_job.background_flag = 1;
+                        current_job.job_order = bg_job_num;
+                        bg_job_list[bg_job_idx] = current_job;
+                        bg_job_idx++;
+                        bg_job_num++;
+                    }
+                    return;
+                }
+            }
+        }
+        return;
+    }
+}
+void background_command()
+{
+    for (int i = bg_job_idx - 1; i >= 0; i--)
+    {
+        if (bg_job_list[i].job_status == 0)
+        {
+            bg_job_list[i].job_status = 1;
+            kill(bg_job_list[i].job_pid, SIGCONT);
+            return;
+        }
+    }
+    return;
 }
