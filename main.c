@@ -43,7 +43,7 @@ void close_fd(int file_descriptors[][3]);
 
 void update_job_list(int del_idx);
 
-void check_completed_jobs();
+void check_completed_jobs(int jobs_flag);
 
 int main()
 {
@@ -441,7 +441,11 @@ void update_job_list(int del_idx) // FIX NUMBERIN SYSTEM
         bg_job_list[i] = bg_job_list[i + 1];
     }
     bg_job_idx--;
-    if (del_idx == bg_job_num - 1)
+    if (bg_job_idx == 0)
+    {
+        bg_job_num = 1;
+    }
+    else if (del_idx == bg_job_idx)
     {
         bg_job_num = bg_job_list[bg_job_idx - 1].job_order + 1;
     }
