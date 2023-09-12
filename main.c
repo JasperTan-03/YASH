@@ -58,7 +58,7 @@ int main()
     char *token = (char *)malloc((MAX_ARG_CHARS) * sizeof(char));
     char input_temp[MAX_INPUTS];
 
-    int exit_flag; // 0: dont exit, 1: exit
+    int exit_flag = 0; // 0: dont exit, 1: exit
     int jobs_flag;
 
     do
@@ -73,7 +73,7 @@ int main()
         if (input_temp[strlen(input_temp) - 1] == '\0')
         {
             printf("\n");
-            exit(1);
+            exit_flag = 1;
         }
 
         // Delete input of '\n'
@@ -94,13 +94,9 @@ int main()
         jobs_flag = 0;
         current_job->job_status = 1;
         // Check if user wants to exit
-        if (!current_job->next_command_flag)
+        if (!current_job->next_command_flag && !exit_flag)
         {
-            if (strcmp(current_job->args[0][0], "exit") == 0)
-            {
-                exit_flag = 1;
-            }
-            else if (strcmp(current_job->args[0][0], "jobs") == 0)
+            if (strcmp(current_job->args[0][0], "jobs") == 0)
             {
                 jobs_flag = 1;
             }
@@ -624,6 +620,7 @@ void foreground_command()
 
                 kill(current_job.job_pid, SIGCONT);
                 current_job.job_status = 1;
+                printf("%s\n", current_job.input);
 
                 if (current_job.row == 1)
                 {
@@ -648,7 +645,6 @@ void foreground_command()
                     if (current_job.background_flag != 1)
                     {
                         close_fd(current_job.file_descriptors);
-                        printf("%s\n", current_job.input);
                     }
                     return;
                 }
@@ -710,6 +706,14 @@ void background_command()
         if (bg_job_list[i].job_status == 0)
         {
             bg_job_list[i].job_status = 1;
+            if (strchr(bg_job_list[i].input, '&') != NULL)
+            {
+                printf("%s\n", bg_job_list[i].input);
+            }
+            else
+            {
+                printf("%s &\n", bg_job_list[i].input);
+            }
             kill(bg_job_list[i].job_pid, SIGCONT);
             return;
         }
