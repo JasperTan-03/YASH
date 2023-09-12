@@ -698,6 +698,11 @@ void foreground_command()
         return;
     }
 }
+
+void foreground_continue()
+{
+}
+
 void background_command()
 {
     for (int i = bg_job_idx - 1; i >= 0; i--)
